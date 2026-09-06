@@ -1,13 +1,13 @@
+import re
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_selection import chi2
-import re
+from statsmodels.stats.multitest import multipletests
 
-
-def alignment_associations(words_source: list[str], parenth_aligned=None, src_list=None, trg_list=None, topK: int | None = None, min_count: int = 1, missing: str = "NOMATCH"):    
+def alignment_associations(words_source: list[str], parenth_aligned=None, src_list=None, trg_list=None, topK: int | None = None, min_count: int = 1, missing: str = "NOMATCH", pretokenized: bool = False, fdr_alpha: float | None = None):
     """
-    Find target-word associations for selected source words in aligned data.
+    Find target-feature associations for selected source words in aligned data.
 
     Parameters
     ----------
@@ -19,19 +19,28 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
         Can be a single string, pandas Series, list, etc.
 
     src_list : iterable[str], optional
-        Source-word iterable[str] containing already aligned source words.
+        Source-word iterable containing already aligned source words.
 
     trg_list : iterable[str], optional
-        Target-word iterable[str] corresponding positionally to src_list.
+        Target-feature iterable corresponding positionally to src_list.
 
     topK : int, optional
-        Maximum number of target words to return.
+        Maximum number of features to return.
 
     min_count : int, default=1
-        Minimum target-word frequency required for inclusion.
+        Minimum feature frequency required for inclusion.
 
     missing : str, default="NOMATCH"
-        Target value treated as missing, besides NaN or empty string (also included by default).
+        Target value treated as missing, besides NaN or empty string.
+
+    pretokenized : bool, default=False
+        If True, whitespace-separated target features are treated as already
+        tokenized, preserving characters such as $ and @.
+
+    fdr_alpha : float, optional
+        False Discovery Rate threshold. If None, no FDR correction is applied.
+        For example, fdr_alpha=0.05 applies FDR-controlled feature selection
+        at alpha=.05.
 
     Returns
     -------
@@ -49,7 +58,6 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
     alignment_associations(["time"], parenth_aligned=df["targ"], topK=20)
     alignment_associations(["time"], src_list=df["src"], trg_list=df["trg"], topK=20)
     """
-
     rx = re.compile(r"([^\s()]+)\s*\(([^)]*)\)")
     Y, corp = [], []
 
@@ -58,29 +66,39 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
             parenth_aligned = [parenth_aligned]
         for line in parenth_aligned:
             for src, trg in rx.findall(line):
-                if pd.isna(trg) or str(trg).strip() in {"", missing}: 
+                if pd.isna(trg) or str(trg).strip() in {"", missing}:
                     continue
                 corp.append(trg)
                 Y.append(1 if src in words_source else 0)
-
     elif src_list is not None and trg_list is not None:
+        if len(src_list) != len(trg_list):
+            raise ValueError("src_list and trg_list must have the same length.")
         for src, trg in zip(src_list, trg_list):
             if pd.isna(trg) or str(trg).strip() in {"", missing}: 
                 continue
             corp.append(trg)
             Y.append(1 if src in words_source else 0)
     else:
-        raise ValueError('Provide parenth_aligned, or both src_list and trg_list.')
-    v = TfidfVectorizer(use_idf=False, norm=None, lowercase=True, token_pattern=r"\b\w+\b")
+        raise ValueError("Provide parenth_aligned, or both src_list and trg_list.")
+
+    Y = np.asarray(Y, dtype=int)
+    if Y.size == 0 or Y.all() or (~Y.astype(bool)).all():
+        raise ValueError("Data must contain both selected and comparison observations.")
+
+    v = TfidfVectorizer(use_idf=False, norm=None, lowercase=True, token_pattern=r"\S+" if pretokenized else r"\b\w+\b")
     X = v.fit_transform(corp)
     feats = np.array(v.get_feature_names_out())
     scores, pvals = chi2(X, Y)
+    q_values = multipletests(pvals, method="fdr_bh")[1]
+    if fdr_alpha is not None:
+        keep = q_values <= fdr_alpha
+        X, feats, scores, pvals, q_values = X[:, keep], feats[keep], scores[keep], pvals[keep], q_values[keep]
+
     counts = np.asarray(X.sum(axis=0)).ravel()
     N = len(Y)
-    Y = np.array(Y)
     results = []
     for i, feat in enumerate(feats):
-        if counts[i] < min_count: 
+        if counts[i] < min_count:
             continue
         col = X[:, i].toarray().ravel() > 0
         TP = np.sum((col == 1) & (Y == 1)) # true positives (i.e. trg word aligned to chosen src word)
@@ -89,6 +107,8 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
         TN = np.sum((col == 0) & (Y == 0)) # true negatives
         precision = TP / (TP + FP) if (TP + FP) > 0 else 0
         recall = TP / (TP + FN) if (TP + FN) > 0 else 0
+        false_positive_rate = FP / (FP + TN) if (FP + TN) > 0 else 0
+        association_difference = recall - false_positive_rate
         # Cramér’s V for 2x2 table
         chi2_val = scores[i]
         phi2 = chi2_val / N
@@ -97,6 +117,7 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
             "feature": feat,
             "chi2": chi2_val,
             "p_value": pvals[i],
+            "q_value": q_values[i],
             "count": counts[i],
             "true_pos": TP,
             "false_pos": FP,
@@ -104,8 +125,11 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
             "true_neg": TN,
             "precision": precision,
             "recall": recall,
-            "false_positive_rate": FP / (FP + TN) if (FP + TN) > 0 else 0,
+            "false_positive_rate": false_positive_rate,
+            "association_difference": association_difference,
             "cramers_V": cramers_v})
     df_out = pd.DataFrame(results)
+    if df_out.empty:
+        return df_out
     df_out = df_out.sort_values("chi2", ascending=False)
     return df_out if topK is None else df_out.head(topK)
