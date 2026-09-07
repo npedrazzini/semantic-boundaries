@@ -38,9 +38,9 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
         tokenized, preserving characters such as $ and @.
 
     fdr_alpha : float, optional
-        False Discovery Rate threshold. If None, no FDR correction is applied.
-        For example, fdr_alpha=0.05 applies FDR-controlled feature selection
-        at alpha=.05.
+        False Discovery Rate threshold. If None, no FDR correction is applied and q-values are
+        returned as NaN. If specified, Benjamini-Hochberg FDR correction is
+        applied and only features with q_value <= fdr_alpha are returned.
 
     Returns
     -------
@@ -88,9 +88,11 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
     v = TfidfVectorizer(use_idf=False, norm=None, lowercase=True, token_pattern=r"\S+" if pretokenized else r"\b\w+\b")
     X = v.fit_transform(corp)
     feats = np.array(v.get_feature_names_out())
+
     scores, pvals = chi2(X, Y)
-    q_values = multipletests(pvals, method="fdr_bh")[1]
+    q_values = None
     if fdr_alpha is not None:
+        q_values = multipletests(pvals, method="fdr_bh")[1]
         keep = q_values <= fdr_alpha
         X, feats, scores, pvals, q_values = X[:, keep], feats[keep], scores[keep], pvals[keep], q_values[keep]
 
@@ -117,7 +119,7 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
             "feature": feat,
             "chi2": chi2_val,
             "p_value": pvals[i],
-            "q_value": q_values[i],
+            "q_value": q_values[i] if q_values is not None else np.nan,
             "count": counts[i],
             "true_pos": TP,
             "false_pos": FP,
