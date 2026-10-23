@@ -5,7 +5,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_selection import chi2
 from statsmodels.stats.multitest import multipletests
 
-def alignment_associations(words_source: list[str], parenth_aligned=None, src_list=None, trg_list=None, topK: int | None = None, min_count: int = 1, missing: str = "NOMATCH", pretokenized: bool = False, fdr_alpha: float | None = None, separate: bool = False):
+def alignment_associations(words_source: list[str], parenth_aligned=None, src_list=None, trg_list=None, topK: int | None = None, min_count: int = 1, missing: str = "NOMATCH", pretokenized: bool = False, fdr_alpha: float | None = None, separate: bool = False, positive_only: bool = False):
     """
     Find target-feature associations for selected source words in aligned data.
 
@@ -46,6 +46,11 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
         If True, calculate associations independently for each source word,
         reusing the same vectorized target data. Returns a dictionary of DataFrames.
         If False, treat all selected source words as one group.
+
+    positive_only : bool, default=False
+        If True, retain only features more frequent proportionally among
+        selected source observations than among comparison observations.
+        Filtering occurs before applying topK.
 
     Returns
     -------
@@ -113,7 +118,21 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
             keep = q_values <= fdr_alpha
             X_current, feats_current, scores, pvals, q_values = X_current[:, keep], feats_current[keep], scores[keep], pvals[keep], q_values[keep]
 
+        keep = np.asarray(X_current.sum(axis=0)).ravel() >= min_count
+        if positive_only:
+            selected = Y == 1
+            rates_selected = np.asarray(X_current[selected].getnnz(axis=0)).ravel() / selected.sum()
+            rates_other = np.asarray(X_current[~selected].getnnz(axis=0)).ravel() / (~selected).sum()
+            keep &= rates_selected > rates_other
+        order = np.flatnonzero(keep)
+        order = order[np.argsort(-scores[order], kind="stable")]
+        if topK is not None:
+            order = order[:topK]
+        X_current, feats_current, scores, pvals = X_current[:, order], feats_current[order], scores[order], pvals[order]
+        if q_values is not None:
+            q_values = q_values[order]
         counts = np.asarray(X_current.sum(axis=0)).ravel()
+
         N = len(Y)
         results = []
         for i, feat in enumerate(feats_current):
@@ -154,7 +173,6 @@ def alignment_associations(words_source: list[str], parenth_aligned=None, src_li
                 continue
             return df_out
         df_out = df_out.sort_values("chi2", ascending=False)
-        df_out = df_out if topK is None else df_out.head(topK)
 
         if separate:
             results_by_word[word] = df_out

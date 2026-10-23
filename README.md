@@ -110,6 +110,7 @@ This is particularly useful together with `extract_ngrams()`, which produces pos
 | `pretokenized` | `bool` | `False` | If `True`, whitespace-separated items in `trg_list` are treated as already extracted features rather than being tokenized as ordinary words. This preserves features such as `ca@` and `$ca`. |
 | `fdr_alpha` | `float` or `None` | `None` | Optional FDR threshold. If specified, only features with `q_value <= fdr_alpha` are returned. `None` calculates q-values without filtering on them. |
 | `separate` | `bool` | `False` | If `True`, calculate associations independently for each source word, returning a dictionary of DataFrames. If `False`, treat all selected source words as one group. |
+| `positive_only` | `bool` | `False` | If `True`, retain only positively associated features (`association_difference > 0`) before applying `topK`. |
 
 ### Output
 
@@ -134,7 +135,7 @@ The function returns a pandas DataFrame with one row per target feature. When se
 
 Because `alignment_associations()` performs a separate chi-square test for every target feature, the returned `q_value` provides a Benjamini-Hochberg False Discovery Rate (FDR)-adjusted p-value.This accounts for the fact that many features are tested simultaneously and is particularly useful when testing large numbers of character n-grams.
 
-By default (`fdr_alpha=None`), q-values are calculated and returned but are not used to filter the results. To return only features that remain significant after FDR correction, specify an FDR threshold:
+By default (`fdr_alpha=None`), no FDR correction is performed and q_value is returned as NaN. To return only features that remain significant after FDR correction, specify an FDR threshold:
 
 ```python
 df = alignment_associations(
@@ -155,10 +156,13 @@ df[df["q_value"] <= 0.05]
 The output when `separate=True` can be accessed like this:
 
 ```python
-dfs = alignment_associations(
-    ["time", "when"],
+
+df = alignment_associations(
+    ["when"],
     parenth_aligned=alignments,
-    separate=True)
+    positive_only=True,
+    topK=200
+)
 
 time_assoc = dfs["time"]
 when_assoc = dfs["when"]

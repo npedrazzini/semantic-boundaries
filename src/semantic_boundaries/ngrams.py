@@ -168,7 +168,7 @@ def cluster_ngrams(df, feature_col="feature", min_count=0, min_true_pos=0, min_p
         (df["false_positive_rate"] <= max_fpr) &
         (df["chi2"] >= min_chi2) &
         (df["p_value"] <= max_p) &
-        (df["q_value"] <= max_q) &
+        (df["q_value"].isna() | (df["q_value"] <= max_q)) &
         (df["cramers_V"] >= min_cramers_v)
     ].copy()
 
