@@ -109,11 +109,11 @@ This is particularly useful together with `extract_ngrams()`, which produces pos
 | `missing` | `str` | `"NOMATCH"` | Value treated as a missing target alignment. NaN and empty strings are also treated as missing. |
 | `pretokenized` | `bool` | `False` | If `True`, whitespace-separated items in `trg_list` are treated as already extracted features rather than being tokenized as ordinary words. This preserves features such as `ca@` and `$ca`. |
 | `fdr_alpha` | `float` or `None` | `None` | Optional FDR threshold. If specified, only features with `q_value <= fdr_alpha` are returned. `None` calculates q-values without filtering on them. |
-
+| `separate` | `bool` | `False` | If `True`, calculate associations independently for each source word, returning a dictionary of DataFrames. If `False`, treat all selected source words as one group. |
 
 ### Output
 
-The function returns a pandas DataFrame with one row per target feature:
+The function returns a pandas DataFrame with one row per target feature. When separate=True, the function instead returns a dictionary mapping each source word to its own association DataFrame.
 
 | Column | Meaning |
 | ----------- | ---------------|
@@ -150,6 +150,18 @@ With `fdr_alpha=0.05`, only features with `q_value <= 0.05` are returned. Raw an
 ```python
 df[df["p_value"] <= 0.05]
 df[df["q_value"] <= 0.05]
+```
+
+The output when `separate=True` can be accessed like this:
+
+```python
+dfs = alignment_associations(
+    ["time", "when"],
+    parenth_aligned=alignments,
+    separate=True)
+
+time_assoc = dfs["time"]
+when_assoc = dfs["when"]
 ```
 
 ### Comparison requirements
